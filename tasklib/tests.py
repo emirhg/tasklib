@@ -15,7 +15,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
-from .backends import TaskWarrior
+from .backends import TaskWarrior, TaskWarriorException, parse_version
 from .task import Task, ReadOnlyDictView
 from .lazy import LazyUUIDTask, LazyUUIDTaskSet
 from .serializing import DATE_FORMAT
@@ -75,9 +75,42 @@ class TaskWarriorTest(TasklibTest):
         tw = self.get_taskwarrior(
             task_command='wsl task',
             # prevent `_get_version` from running as `wsl` may not exist
-            version_override=os.getenv('TASK_VERSION', 'v1.2.3'),
+            version_override=os.getenv('TASK_VERSION', '3.0.0'),
         )
         self.assertEqual(tw._get_task_command(), ['wsl', 'task'])
+
+    def test_rejects_taskwarrior_2(self):
+        # tasklib 3.x only supports Taskwarrior 3 and newer
+        with self.assertRaises(TaskWarriorException):
+            self.get_taskwarrior(version_override='2.5.1')
+
+    def test_accepts_taskwarrior_3(self):
+        tw = self.get_taskwarrior(version_override='3.5.0')
+        self.assertEqual(tw.version_info, (3, 5, 0))
+
+    def test_parse_version(self):
+        self.assertEqual(parse_version('3.5.0'), (3, 5, 0))
+        self.assertEqual(parse_version('3.10.2\n'), (3, 10, 2))
+        with self.assertRaises(TaskWarriorException):
+            parse_version('not a version')
+
+    def test_undo_failure_raises(self):
+        # Taskwarrior 3 prints "Could not undo" on stdout with exit status 0
+        self.tw.execute_command = lambda args, **kw: [
+            'Could not undo: other operations have occurred.',
+        ]
+        with self.assertRaises(TaskWarriorException):
+            self.tw.undo()
+
+    def test_dependencies_passed_to_new_task_are_saved(self):
+        a = Task(self.tw, description='a')
+        a.save()
+        b = Task(self.tw, description='b', depends={a})
+        b.save()
+
+        self.assertEqual(
+            set(t['uuid'] for t in b['depends']), {a['uuid']},
+        )
 
 
 class TaskFilterTest(TasklibTest):
@@ -285,16 +318,6 @@ class TaskFilterTest(TasklibTest):
         self.assertEqual(list(tasks), [t])
 
     def test_filter_dummy_by_modified(self):
-        # Older TW version does not support bumping modified
-        # on save
-        if self.tw.version < '2.2.0':
-            # Python2.6 does not support SkipTest. As a workaround
-            # mark the test as passed by exiting.
-            if getattr(unittest, 'SkipTest', None) is not None:
-                raise unittest.SkipTest()
-            else:
-                return
-
         t = Task(self.tw, description='test')
         t.save()
 
@@ -1209,14 +1232,6 @@ class TimezoneAwareDatetimeTest(TasklibTest):
 class DatetimeStringTest(TasklibTest):
 
     def test_simple_now_conversion(self):
-        if self.tw.version < '2.4.0':
-            # Python2.6 does not support SkipTest. As a workaround
-            # mark the test as passed by exiting.
-            if getattr(unittest, 'SkipTest', None) is not None:
-                raise unittest.SkipTest()
-            else:
-                return
-
         t = Task(self.tw, description='test task', due='now')
         now = datetime.datetime.now().astimezone()
 
@@ -1229,14 +1244,6 @@ class DatetimeStringTest(TasklibTest):
             self.assertTrue((t['due'] - now).total_seconds() < 5)
 
     def test_simple_eoy_conversion(self):
-        if self.tw.version < '2.4.0':
-            # Python2.6 does not support SkipTest. As a workaround
-            # mark the test as passed by exiting.
-            if getattr(unittest, 'SkipTest', None) is not None:
-                raise unittest.SkipTest()
-            else:
-                return
-
         t = Task(self.tw, description='test task', due='eoy')
         now = datetime.datetime.now().astimezone()
         eoy = datetime.datetime(
@@ -1247,26 +1254,9 @@ class DatetimeStringTest(TasklibTest):
             minute=59,
             second=59,
         ).astimezone()
-        if self.tw.version >= '2.5.2' and self.tw.version < '2.6.0':
-            eoy = datetime.datetime(
-                year=now.year+1,
-                month=1,
-                day=1,
-                hour=0,
-                minute=0,
-                second=0,
-            ).astimezone()
         self.assertEqual(eoy, t['due'])
 
     def test_complex_eoy_conversion(self):
-        if self.tw.version < '2.4.0':
-            # Python2.6 does not support SkipTest. As a workaround
-            # mark the test as passed by exiting.
-            if getattr(unittest, 'SkipTest', None) is not None:
-                raise unittest.SkipTest()
-            else:
-                return
-
         t = Task(self.tw, description='test task', due='eoy - 4 months')
         now = datetime.datetime.now().astimezone()
         due_date = datetime.datetime(
@@ -1277,26 +1267,9 @@ class DatetimeStringTest(TasklibTest):
             minute=59,
             second=59,
         ).astimezone() - datetime.timedelta(0, 4 * 30 * 86400)
-        if self.tw.version >= '2.5.2' and self.tw.version < '2.6.0':
-            due_date = datetime.datetime(
-                year=now.year+1,
-                month=1,
-                day=1,
-                hour=0,
-                minute=0,
-                second=0,
-            ).astimezone() - datetime.timedelta(0, 4 * 30 * 86400)
         self.assertEqual(due_date, t['due'])
 
     def test_filtering_with_string_datetime(self):
-        if self.tw.version < '2.4.0':
-            # Python2.6 does not support SkipTest. As a workaround
-            # mark the test as passed by exiting.
-            if getattr(unittest, 'SkipTest', None) is not None:
-                raise unittest.SkipTest()
-            else:
-                return
-
         t = Task(
             self.tw,
             description='test task',

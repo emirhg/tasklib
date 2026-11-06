@@ -1,0 +1,39 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} / Taskwarrior ${{ matrix.taskwarrior-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        taskwarrior-version: ["v3.5.0"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Taskwarrior build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential cmake git uuid-dev
+
+      - name: Build and install Taskwarrior ${{ matrix.taskwarrior-version }}
+        run: |
+          git clone --depth 1 --branch "${{ matrix.taskwarrior-version }}" \
+            https://github.com/GothenburgBitFactory/taskwarrior.git /tmp/taskwarrior
+          cmake -S /tmp/taskwarrior -B /tmp/taskwarrior/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/taskwarrior/build --target task_executable -j 4
+          sudo install -m 755 /tmp/taskwarrior/build/src/task /usr/local/bin/task
+          task --version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install tasklib
+        run: pip install -e .
+
+      - name: Run tests
+        run: python -m unittest tasklib.tests -v

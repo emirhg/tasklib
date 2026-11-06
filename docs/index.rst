@@ -4,13 +4,13 @@ Welcome to tasklib's documentation!
 tasklib is a Python library for interacting with taskwarrior_ databases, using
 a queryset API similar to that of Django's ORM.
 
-Supports Python 3.5 and above, with taskwarrior 2.4.x and above.
-Older versions of taskwarrior are untested and may not work.
+Supports Python 3.5 and above, with taskwarrior 3.x.
+Taskwarrior 2.x is not supported; use tasklib 2.x with it instead.
 
 Requirements
 ------------
 
-* taskwarrior_ v2.4.x or above, although newest minor release is recommended.
+* taskwarrior_ v3.0.0 or above, although newest minor release is recommended.
 
 Installation
 ------------
@@ -377,7 +377,6 @@ are set in the same timezone:
     >>> t['due'] == now.astimezone(zoneinfo.ZoneInfo('UTC'))
     True
 
-*Note*: Following behaviour is available only for TaskWarrior >= 2.4.0.
 
 There is a third approach to setting up date time values, which leverages
 the 'task calc' command. You can simply set any datetime attribute to
@@ -497,7 +496,7 @@ To pass your own configuration overrides, you just need to update this dictionar
 Creating hook scripts
 ---------------------
 
-From version 2.4.0, TaskWarrior has support for hook scripts. Tasklib provides
+TaskWarrior has support for hook scripts. Tasklib provides
 some very useful helpers to write those. With tasklib, writing these becomes
 a breeze::
 
@@ -584,13 +583,12 @@ the ``execute_command()`` method::
 
     >>> tw = TaskWarrior()
     >>> sync_config = {
-    ...     'taskd.certificate': '/home/tbabej/.task/tbabej.cert.pem',
-    ...     'taskd.credentials': 'Public/tbabej/34af54de-3cb2-4d3d-82be-33ddb8fd3e66',
-    ...     'taskd.server': 'task.server.com:53589',
-    ...     'taskd.ca': '/home/tbabej/.task/ca.cert.pem',
-    ...     'taskd.trust': 'ignore hostname'}
-    >>> tw.config.update(sync_config)
-    >>> tw.execute_command(['sync'])
+    ...     'sync.server.url': 'https://sync.example.com',
+    ...     'sync.server.client_id': '34af54de-3cb2-4d3d-82be-33ddb8fd3e66',
+    ...     'sync.encryption_secret': 'my-secret'}
+    >>> tw.execute_command(['sync'], config_override=sync_config)
+
+See the ``task-sync(5)`` man page for all supported ``sync.*`` settings.
 
 
 .. _taskwarrior: http://taskwarrior.org

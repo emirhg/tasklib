@@ -202,14 +202,8 @@ class SerializingObject(object):
         if not raw_uuids:
             return set()
 
-        # TW 2.4.4 encodes list of dependencies as a single string
-        if type(raw_uuids) is not list:
-            uuids = raw_uuids.split(',')
-        # TW 2.4.5 and later exports them as a list, no conversion needed
-        else:
-            uuids = raw_uuids
-
-        return LazyUUIDTaskSet(self.backend, uuids)
+        # Taskwarrior exports dependencies as a list of UUID strings
+        return LazyUUIDTaskSet(self.backend, raw_uuids)
 
     def datetime_normalizer(self, value):
         """

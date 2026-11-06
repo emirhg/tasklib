@@ -1,5 +1,4 @@
 import abc
-import copy
 import datetime
 import json
 import logging
@@ -13,7 +12,25 @@ from .filters import TaskWarriorFilter
 
 DATE_FORMAT_CALC = '%Y-%m-%dT%H:%M:%S'
 
+# Minimum supported Taskwarrior version. tasklib 3.x targets Taskwarrior 3
+# (TaskChampion backend) and does not support the 2.x series.
+MIN_TASKWARRIOR_VERSION = (3, 0, 0)
+
+# Taskwarrior colorizes some table headers (e.g. `task show`) even when
+# output is piped. Strip the SGR escape sequences before parsing.
+ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*m')
+
 logger = logging.getLogger(__name__)
+
+
+def parse_version(text):
+    """Parses a version string such as '3.5.0' into a tuple of ints."""
+    match = re.search(r'(\d+)\.(\d+)\.(\d+)', text or '')
+    if not match:
+        raise TaskWarriorException(
+            'Unable to parse Taskwarrior version from: %r' % text,
+        )
+    return tuple(int(part) for part in match.groups())
 
 
 class Backend(object):
@@ -66,7 +83,7 @@ class Backend(object):
 
     @abc.abstractmethod
     def sync(self):
-        """Syncs the backend database with the taskd server"""
+        """Syncs the backend database with the configured sync server"""
         pass
 
     def convert_datetime_string(self, value):
@@ -82,13 +99,6 @@ class TaskWarriorException(Exception):
 
 
 class TaskWarrior(Backend):
-
-    VERSION_2_4_0 = '2.4.0'
-    VERSION_2_4_1 = '2.4.1'
-    VERSION_2_4_2 = '2.4.2'
-    VERSION_2_4_3 = '2.4.3'
-    VERSION_2_4_4 = '2.4.4'
-    VERSION_2_4_5 = '2.4.5'
 
     def __init__(self, data_location=None, create=True,
                  taskrc_location=None, task_command='task',
@@ -106,17 +116,25 @@ class TaskWarrior(Backend):
 
         self._config = None
         self.version = version_override or self._get_version()
+        self.version_info = parse_version(self.version)
+        if self.version_info < MIN_TASKWARRIOR_VERSION:
+            raise TaskWarriorException(
+                'tasklib requires Taskwarrior %s or newer, found %s' % (
+                    '.'.join(str(part) for part in MIN_TASKWARRIOR_VERSION),
+                    self.version,
+                ),
+            )
+
         self.overrides = {
             'confirmation': 'no',
-            'dependency.confirmation': 'no',  # See TW-1483 or taskrc man page
+            'dependency.confirmation': 'no',  # Avoid prompts when editing deps
             'recurrence.confirmation': 'no',  # Necessary for modifying R tasks
 
-            # Defaults to on since 2.4.5, we expect off during parsing
+            # Output is parsed line by line, so we need one object per line
             'json.array': 'off',
 
-            # 2.4.3 onwards supports 0 as infite bulk, otherwise set just
-            # arbitrary big number which is likely to be large enough
-            'bulk': 0 if self.version >= self.VERSION_2_4_3 else 100000,
+            # 0 means unlimited bulk operations
+            'bulk': 0,
         }
 
         # Set data.location override if passed via kwarg
@@ -149,7 +167,7 @@ class TaskWarrior(Backend):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
         stdout, stderr = [x.decode('utf-8') for x in p.communicate()]
-        return stdout.strip('\n')
+        return stdout.strip()
 
     def _get_modified_task_fields_as_args(self, task):
         args = []
@@ -202,7 +220,11 @@ class TaskWarrior(Backend):
         # to keep a list of all depedencies in the _data dictionary,
         # not just currently added/removed ones
 
-        old_dependencies = task._original_data.get('depends', set())
+        # A new task has no stored dependencies yet, so every dependency it
+        # was created with must be added (the initial data is snapshotted
+        # into _original_data by Task.__init__).
+        old_dependencies = (task._original_data.get('depends', set())
+                            if task.saved else set())
 
         added = task['depends'] - old_dependencies
         removed = old_dependencies - task['depends']
@@ -220,7 +242,6 @@ class TaskWarrior(Backend):
 
     def convert_datetime_string(self, value):
         # For strings, use 'calc' to evaluate the string to datetime
-        # available since TW 2.4.0
         args = value.split()
         result = self.execute_command(['calc'] + args)
         naive = datetime.datetime.strptime(result[0], DATE_FORMAT_CALC)
@@ -249,6 +270,10 @@ class TaskWarrior(Backend):
         config_regex = re.compile(r'^(?P<key>[^\s]+)\s+(?P<value>[^\s].*$)')
 
         for line in raw_output:
+            line = ANSI_ESCAPE_RE.sub('', line)
+            # Skip the table header row, which is not a config entry
+            if line.startswith('Config Variable'):
+                continue
             match = config_regex.match(line)
             if match:
                 config[match.group('key')] = match.group('value').strip()
@@ -286,22 +311,12 @@ class TaskWarrior(Backend):
                     stderr.rstrip().split('\n'),
                     p.returncode)
 
-    def enforce_recurrence(self):
-        # Run arbitrary report command which will trigger generation
-        # of recurrent tasks.
-
-        # Only necessary for TW up to 2.4.1, fixed in 2.4.2.
-        if self.version < self.VERSION_2_4_2:
-            self.execute_command(['next'], allow_failure=False)
-
-    def merge_with(self, path, push=False):
-        path = path.rstrip('/') + '/'
-        self.execute_command(['merge', path], config_override={
-            'merge.autopush': 'yes' if push else 'no',
-        })
-
     def undo(self):
-        self.execute_command(['undo'])
+        # Taskwarrior 3 reports a failed undo on stdout with exit status 0
+        output = self.execute_command(['undo'])
+        for line in output:
+            if line.startswith('Could not undo'):
+                raise TaskWarriorException(line)
 
     @lru_cache(maxsize=128)
     def get_task(self, uuid):
@@ -310,7 +325,6 @@ class TaskWarrior(Backend):
     # Backend interface implementation
 
     def filter_tasks(self, filter_obj):
-        self.enforce_recurrence()
         args = filter_obj.get_filter_params() + ["export"]
         tasks = []
         for line in self.execute_command(args):
@@ -393,25 +407,7 @@ class TaskWarrior(Backend):
         def valid(output):
             return len(output) == 1 and output[0].startswith('{')
 
-        # For older TW versions attempt to uniquely locate the task
-        # using the data we have if it has been just saved.
-        # This can happen when adding a completed task on older TW versions.
-        if (not valid(output) and self.version < self.VERSION_2_4_5
-                and after_save):
-
-            # Make a copy, removing ID and UUID. It's most likely invalid
-            # (ID 0) if it failed to match a unique task.
-            data = copy.deepcopy(task._data)
-            data.pop('id', None)
-            data.pop('uuid', None)
-
-            taskfilter = self.filter_class(self)
-            for key, value in data.items():
-                taskfilter.add_filter_param(key, value)
-
-            output = self.execute_command(taskfilter.get_filter_params() + ['export'])
-
-        # If more than 1 task has been matched still, raise an exception
+        # If the task could not be located, raise an exception
         if not valid(output):
             raise TaskWarriorException(
                 'Unique identifiers {0} with description: {1} matches '

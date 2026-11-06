@@ -1,8 +1,8 @@
 tasklib
 =======
 
-.. image:: https://travis-ci.org/robgolding/tasklib.png?branch=develop
-    :target: http://travis-ci.org/robgolding/tasklib
+.. image:: https://github.com/GothenburgBitFactory/tasklib/actions/workflows/tests.yml/badge.svg
+    :target: https://github.com/GothenburgBitFactory/tasklib/actions/workflows/tests.yml
 
 .. image:: https://coveralls.io/repos/robgolding/tasklib/badge.png?branch=develop
     :target: https://coveralls.io/r/robgolding/tasklib?branch=develop
@@ -14,9 +14,10 @@ Requirements
 ------------
 
 * Python 3.5 or above
-* taskwarrior_ v2.4.x or above.
+* taskwarrior_ v3.0.0 or above.
 
-Older versions of taskwarrior are untested and may not work.
+Taskwarrior 2.x is not supported. tasklib 3.x uses the Taskwarrior 3 storage
+backend; existing 2.x data can be migrated with ``task import-v2``.
 
 Installation
 ------------
